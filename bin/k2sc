@@ -9,7 +9,7 @@ import logging
 import math as mt
 import numpy as np
 import scipy as sp
-import astropy.io.fits as pf
+import pyfits as pf
 import matplotlib.pyplot as pl
 
 try:
@@ -38,11 +38,16 @@ from argparse import ArgumentParser
 from k2sc.core import *
 from k2sc.detrender import Detrender
 from k2sc.kernels import kernels, BasicKernel, BasicKernelEP, QuasiPeriodicKernel, QuasiPeriodicKernelEP
-from k2sc.k2io import select_reader, FITSWriter, SPLOXReader
+from k2sc.k2io import select_reader, FITSWriter, SPLOXReader, MASTPixelReader
 from k2sc.cdpp import cdpp
 from k2sc.de import DiffEvol
 from k2sc.ls import fasper
 from k2sc.utils import medsig
+
+import k2phot
+import k2phot.pipeline_k2sc
+reload(k2phot.pipeline_k2sc)
+
 
 warnings.resetwarnings()
 warnings.filterwarnings('ignore', category=UserWarning, append=True)
@@ -74,8 +79,11 @@ def psearch(time, flux, min_p, max_p):
     
     return period[j], fap
 
-
 def detrend(dataset):
+    """
+    Needs to have args defined
+    """
+
     ## Setup the logger
     ## ----------------
     logger  = logging.getLogger('Worker %i'%mpi_rank)
@@ -190,6 +198,7 @@ def detrend(dataset):
         detrender = Detrender(ds.fluxes[iset], inputs, mask=masks[iset],
                               splits=splits, kernel=kernel, tr_nrandom=args.tr_nrandom,
                               tr_nblocks=args.tr_nblocks, tr_bspan=args.tr_bspan)
+
         de = DiffEvol(detrender.neglnposterior, kernel.bounds, args.de_npop)
 
         ## Period population generation
@@ -277,13 +286,16 @@ def detrend(dataset):
 
 
 if __name__ == '__main__':
+    # Runtime examples.
+    # bin/k2sc -c 3 /Users/petigura//Research/K2//k2_archive/pixel/C3/ktwo205904628-c03_lpd-targ.fits
+    # 
     ap = ArgumentParser(description='K2SC: K2 systematics correction using Gaussian processes')
     gts = ap.add_argument_group('Training set options')
     gps = ap.add_argument_group('Period search', description='Options to control the initial Lomb-Scargle period search')
     gfd = ap.add_argument_group('Flare detection', description='Options to control the detection and masking of flares')
     god = ap.add_argument_group('Outlier detection')
     gde = ap.add_argument_group('Global optimisation', description='Options to control the global hyperparameter optimisation')
-    ap.add_argument('files', metavar = 'F', type=str, nargs='*', help='Input light curve file name.')
+    ap.add_argument('pixfn', metavar = 'F', type=str, help='Input light curve file name.')
     ap.add_argument('-c', '--campaign', metavar='C', type=int, help='Campaign number')
     ap.add_argument('--splits', default=None, type=lambda s:fromstring(s.strip('[]'), sep=','), help='List of time values for kernel splits')
     ap.add_argument('--quiet', action='store_true', default=False, help='suppress messages')
@@ -312,20 +324,25 @@ if __name__ == '__main__':
     gfd.add_argument('--flare-erosion', default=5, type=int)
     god.add_argument('--outlier-sigma', default=5, type=float)
     god.add_argument('--outlier-mwidth', default=25, type=int)
+    god.add_argument('--npix', default=20, type=int)
     args = ap.parse_args()
 
-    csplits = {4: [2240,2273]}
+    csplits = {4: [2240,2273], 3: [2180], 1:[2017,2022] }
+
+    transfn = {1:'pixeltrans_C1_ch04.h5' , 3: 'pixeltrans_C3_ch04.h5',}
+    transfn = transfn[args.campaign]
+    transfn = join('/Users/petigura//Research/K2//k2photfiles/',transfn)
+
+    print(args)
 
     ## Logging
-    ##
-    if mpi_rank == 0:
-        logger = logging.getLogger('Master')
-        if args.logfile:
-            logfile = open(args.logfile, mode='w')
-            fh = logging.StreamHandler(logfile)
-            fh.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
-            fh.setLevel(logging.DEBUG)
-            logger.addHandler(fh)
+    logger = logging.getLogger('Master')
+    if args.logfile:
+        logfile = open(args.logfile, mode='w')
+        fh = logging.StreamHandler(logfile)
+        fh.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
+        fh.setLevel(logging.DEBUG)
+        logger.addHandler(fh)
 
     if args.splits is None:
         splits = csplits[args.campaign]
@@ -338,113 +355,26 @@ if __name__ == '__main__':
 
     ## Select data reader
     ## NOTE: We don't allow mixed input types per run
-    reader = select_reader(args.files[0])
+    reader = MASTPixelReader
 
-    if reader is None:
-        logger.critical("Unrecognized input file type for file {:s}".format(args.files[0]))
-        exit()
-                
-    ## Check if we're dealing with a single input file with many stars
-    if len(args.files) == 1 and issubclass(reader, SPLOXReader):
-        singlefile = True
-        infile = args.files[0]
-        sid = args.start_i
-        all_items = range(args.start_i, min(args.end_i or 1e8, reader.nstars(args.files[0])))
-    else:
-        singlefile = False
-        infile = args.files[args.start_i]
-        sid = 0
-        all_items = args.files[args.start_i:args.end_i]
-    items = copy(all_items)
-    n_items = len(items)
+    n_items = 1
+    sid = 0
 
-    if mpi_rank == 0:
-        if (not with_mpi) or (mpi_size==1):
-            logger.info("Detrending {:d} light curves without MPI".format(n_items))
-        else:
-            logger.info("Detrending {:d} light curves using {:d} worker nodes".format(n_items, mpi_size-1))
-        logger.info('')
-        logger.info('Saving the results to %s', args.save_dir)
-        logger.info('')
-        logger.info('Differential evolution parameters')
-        logger.info('  Population size: {:3d}'.format(args.de_npop))
-        logger.info('  Number of iterations: {:3d}'.format(args.de_niter))
-        logger.info('  Maximum DE time: {:6.2f} seconds'.format(args.de_max_time))
-        logger.info('')
-
-    ## Without MPI or running with a single node
-    ## =========================================
-    if (not with_mpi) or (mpi_size==1):
-        for item in items:
-            if singlefile:
-                sid = item
-            else:
-                infile = item
-                if not exists(infile):
-                    logger.warning("The input file {:s} doesn't exists, skipping the file".format(infile))
-                    continue
-            dataset = reader.read(infile, sid=sid, type=args.flux_type)
-            detrend(dataset)
-                                
-
-    ## With MPI
-    ## ========
-    else:
-        ## Master node
-        ## -----------
-        if mpi_rank == 0:
-            free_workers = range(1,mpi_size)
-            active_workers = []
-            n_finished_items = 0
-
-            while items or active_workers:
-                ## Send an item
-                while items and free_workers:
-                    w = free_workers.pop()
-
-                    item = items.pop()
-
-                    if singlefile:
-                        sid = item
-                        logger.info("Processing star %i", sid)
-                    else:
-                        infile = item
-                        logger.info("Processing file %s",abspath(infile))
-                        if not exists(infile):
-                            logger.warning("The input file {:s} doesn't exists, skipping the file".format(infile))
-                            continue
-                        
-                    dataset = reader.read(infile, sid=sid, type=args.flux_type)
-                    comm.send(dataset, dest=w, tag=0)
-                    active_workers.append(w)
-
-                ## Receive the results
-                for w in active_workers:
-                    if comm.Iprobe(w, 2):
-                        res = comm.recv(source=w, tag=2)
-                        free_workers.append(w)
-                        active_workers.remove(w)
-                        n_finished_items += 1
-
-                        if args.logfile:
-                            logfile_w = open('{:s}.{:03d}'.format(args.logfile, w), 'r')
-                            logfile.write(logfile_w.read())
-                            logfile_w.close()
-                        logger.info("Finished {:3d} of {:3d} light curves".format(n_finished_items,n_items))
-
-            for w in free_workers:
-                comm.send(-1, dest=w, tag=0)
-
-        ## Worker node
-        ## -----------
-        else:
-            while True:
-                dataset = comm.recv(source=mpi_root, tag=0)
-                if infile == -1:
-                    break
-
-                detrend(dataset)
-                comm.send(dataset.epic, dest=mpi_root, tag=2)    
+    logger.info('')
+    logger.info('Saving the results to %s', args.save_dir)
+    logger.info('')
+    logger.info('Differential evolution parameters')
+    logger.info('  Population size: {:3d}'.format(args.de_npop))
+    logger.info('  Number of iterations: {:3d}'.format(args.de_niter))
+    logger.info('  Maximum DE time: {:6.2f} seconds'.format(args.de_max_time))
+    logger.info('')
 
 
-        
+    pixfn = args.pixfn
+    lcfn = 'test.fits'
+    tlimits = [0,9999]
+    pipe = k2phot.pipeline_k2sc.PipelineK2SC(pixfn,lcfn,transfn)
+    pipe.npix = args.npix
+    dataset = pipe.get_K2Data()
+    detrend(dataset)
+
