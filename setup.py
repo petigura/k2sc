@@ -1,4 +1,5 @@
-from numpy.distutils.core import setup, Extension
+from numpy.distutils.core import Extension
+from setuptools import setup
 from numpy.distutils.misc_util import Configuration
 import distutils.sysconfig as ds
 
@@ -14,7 +15,7 @@ setup(name='K2SC',
       package_dir={'k2sc':'src'},
       scripts=['bin/k2sc','bin/k2plot','bin/k2ginfo', 'bin/k2mastify'],
       packages=['k2sc'],
-      install_requires=["numpy", "astropy", "scipy", "george"],
+      install_requires=["numpy"],
       license='GPLv2',
       classifiers=[
           "Topic :: Scientific/Engineering",
