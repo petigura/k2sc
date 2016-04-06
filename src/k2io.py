@@ -243,6 +243,13 @@ class SPLOXReader(DataReader):
 ## =================
 
 class FITSWriter(object):
+    # data is the input dataset object
+    # dtres is a list of `Results` objects
+    # Result(detrender, pv, tt+mt, tp+mp, cdpp_r, cdpp_t, cdpp_c, warn))
+    # tt + mt is the systematic light curve without the time-dependent component
+    # tp + mp is the time dependent component with out the systematics
+
+
     @classmethod
     def write(cls, fname, splits, data, dtres):
 
