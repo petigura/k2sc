@@ -24,15 +24,16 @@
 import warnings
 import numpy as np
 import re
-import astropy.io.fits as pf
+import pyfits as pf
 from os.path import basename, splitext
 from datetime import datetime
 from collections import namedtuple
-
 from k2data import K2Data
 
 warnings.resetwarnings()
 warnings.filterwarnings('ignore', category=UserWarning, append=True)
+
+pf_version = float(re.findall('^([0-9]\.[0-9])\.*', pf.__version__)[0])
 
 ## ===  READERS  ===
 ## =================
@@ -83,7 +84,74 @@ class AMCReader(DataReader):
             header = f.readline().lower().split()
             head_ok = all([cn in header for cn in 'dates cadences xpos ypos quality'.split()])
         return ext_ok and head_ok
+
+from k2phot.config import bjd0
+from astropy.io import fits
+import k2phot.pipeline_core
+
+class MASTPixelReader(DataReader):
+    extensions = ['.fits', '.fit']
+    ndatasets = 1
+    fn_out_template = 'EPIC_{:9d}_mast.fits'
+    allowed_types = ['sap', 'pdc']
+
+    @classmethod
+    def read(cls, fname, sid, **kwargs):
+
+#        ftype = 'sap_flux' if kwargs.get('type','sap').lower() == 'sap' else 'pdcsap_flux'
+#        try:
+#            epic = int(re.findall('ktwo([0-9]+)-c', basename(fname))[0])
+#        except:
+#            epic = int(re.findall('C([0-9]+)_smear', basename(fname))[0][2:]) # for smear
+#        data = pf.getdata(fname, 1)
+#        head = pf.getheader(fname, 0)
+
+        lcfn = 'test.fits'
+        transfn = '/Users/petigura//Research/K2//k2photfiles/pixeltrans_C3_ch04.h5'
+        tlimits = [0,9999]
+        pipe = k2phot.pipeline_core.Pipeline(
+            fname, lcfn, transfn, tlimits=tlimits, tex=None
+        )
+        pipe.set_lc0('region',200)
+        print "using the following aperture"
+        print pipe.im.ap
+        hduL = fits.open(pipe.pixfn)
+        quality = hduL[1].data['QUALITY']
+        fluxes = pipe.lc0['fsap']
+        time = pipe.lc0['t'] - bjd0
+        cadence = pipe.lc0['cad']
+
+        # Stand in for true photometric errors
+        errors = fluxes * (60 * 30 * pipe.lc0['fsap'].median() )**-0.5
+        pos = pipe.lc0['xpr ypr'.split()]
+        pos -= pos.mean()
+        head = pf.getheader(fname, 0)
+        epic = head['KEPLERID']
+        x = pos['xpr']
+        y = pos['ypr']
+
+        time = np.array(time)
+        cadence = np.array(cadence)
+        quality = np.array(quality)
+        fluxes = np.array(fluxes)
+        errors = np.array(errors)
+        x = np.array(x)
+        y = np.array(y)
+        return K2Data(epic,
+                      time=time,
+                      cadence=cadence,
+                      quality=quality,
+                      fluxes=fluxes,
+                      errors=errors,
+                      x=x,
+                      y=y,
+                      sap_header=head)    
     
+    @classmethod
+    def can_read(cls, fname):
+        ext_ok = cls.is_extension_valid(fname)
+        return ext_ok
+
     
 class MASTReader(DataReader):
     extensions = ['.fits', '.fit']
@@ -175,6 +243,13 @@ class SPLOXReader(DataReader):
 ## =================
 
 class FITSWriter(object):
+    # data is the input dataset object
+    # dtres is a list of `Results` objects
+    # Result(detrender, pv, tt+mt, tp+mp, cdpp_r, cdpp_t, cdpp_c, warn))
+    # tt + mt is the systematic light curve without the time-dependent component
+    # tp + mp is the time dependent component with out the systematics
+
+
     @classmethod
     def write(cls, fname, splits, data, dtres):
 
@@ -184,10 +259,9 @@ class FITSWriter(object):
             return arr
 
         C = pf.Column
-        
         cols = [C(name='time',     format='D', array=unpack(data.time)),
-                C(name='cadence',  format='I', array=unpack(data.cadence)),
-                C(name='quality',  format='I', array=unpack(data.quality)),
+                C(name='cadence',  format='J', array=unpack(data.cadence)),
+                C(name='quality',  format='J', array=unpack(data.quality)),
                 C(name='x',        format='D', array=unpack(data.x)),
                 C(name='y',        format='D', array=unpack(data.y))]
 
@@ -198,7 +272,11 @@ class FITSWriter(object):
                          C(name='trend_t_%d' %(i+1), format='D', array=unpack(dtres[i].tr_time)),
                          C(name='trend_p_%d' %(i+1), format='D', array=unpack(dtres[i].tr_position))])
 
-        hdu = pf.BinTableHDU.from_columns(pf.ColDefs(cols))
+        if pf_version >= 3.3:
+            hdu = pf.BinTableHDU.from_columns(pf.ColDefs(cols))
+        else:
+            hdu = pf.new_table(cols)
+
         hdu.header['extname'] = 'k2_detrend'
         hdu.header['object'] = data.epic
         hdu.header['epic']   = data.epic
@@ -222,8 +300,7 @@ class FITSWriter(object):
         hdu_list.writeto(fname, clobber=True)
 
 
-readers = [AMCReader,MASTReader,SPLOXReader]
-
+readers = [AMCReader,MASTReader,SPLOXReader,MASTPixelReader]
 def select_reader(fname):
     for R in readers:
         if R.can_read(fname):

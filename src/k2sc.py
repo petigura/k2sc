@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from __future__ import print_function, division
+print("hello")
 import os
 import sys
 import errno
@@ -11,17 +12,6 @@ import numpy as np
 import scipy as sp
 import pyfits as pf
 import matplotlib.pyplot as pl
-
-try:
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    mpi_rank = comm.Get_rank()
-    mpi_size = comm.Get_size()
-    with_mpi = True
-except ImportError:
-    mpi_rank = 0
-    mpi_size = 1
-    with_mpi = False
 
 from copy import copy   
 from collections import namedtuple
@@ -35,19 +25,17 @@ from datetime import datetime
 from os.path import join, exists, abspath, basename
 from argparse import ArgumentParser
 
-from k2sc.core import *
-from k2sc.detrender import Detrender
-from k2sc.kernels import kernels, BasicKernel, BasicKernelEP, QuasiPeriodicKernel, QuasiPeriodicKernelEP
-from k2sc.k2io import select_reader, FITSWriter, SPLOXReader, MASTPixelReader
-from k2sc.cdpp import cdpp
-from k2sc.de import DiffEvol
-from k2sc.ls import fasper
-from k2sc.utils import medsig
+from core import *
+from detrender import Detrender
+from kernels import kernels, BasicKernel, BasicKernelEP, QuasiPeriodicKernel, QuasiPeriodicKernelEP
+from k2io import select_reader, FITSWriter, SPLOXReader, MASTPixelReader
+from cdpp import cdpp
+from de import DiffEvol
+from ls import fasper
+from utils import medsig
 
 import k2phot
 import k2phot.pipeline_k2sc
-reload(k2phot.pipeline_k2sc)
-
 
 warnings.resetwarnings()
 warnings.filterwarnings('ignore', category=UserWarning, append=True)
@@ -57,6 +45,8 @@ warnings.filterwarnings('ignore', category=DeprecationWarning, append=True)
 ##TODO: Define the covariance matrix splits for every campaign
 
 mpi_root = 0
+mpi_rank = 1
+
 logging.basicConfig(level=logging.DEBUG, format='%(levelname)s %(name)s: %(message)s')
 
 def nanmedian(a):
@@ -79,21 +69,15 @@ def psearch(time, flux, min_p, max_p):
     
     return period[j], fap
 
-def detrend(dataset):
+def detrend(dataset, args):
     """
     Needs to have args defined
     """
 
     ## Setup the logger
     ## ----------------
-    logger  = logging.getLogger('Worker %i'%mpi_rank)
-    logfile = open('{:s}.{:03d}'.format(args.logfile, mpi_rank), mode='w')
-    fh = logging.StreamHandler(logfile)
-    fh.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
-    fh.setLevel(logging.DEBUG)
-    logger.addHandler(fh)
-    fpath_out = join(args.save_dir, reader.fn_out_template.format(dataset.epic))
-    logger.name = 'Worker {:d} <{:d}>'.format(mpi_rank, dataset.epic)
+    logger  = logging.getLogger('Worker %i' % mpi_rank)
+    logger.name = '<{:d}>'.format(dataset.epic)
 
     np.seterrcall(lambda e,f: logger.info(e))
     np.seterr(invalid='ignore')
@@ -112,7 +96,9 @@ def detrend(dataset):
     ## Periodic signal masking
     ## -----------------------
     if args.p_mask_center and args.p_mask_period and args.p_mask_duration:
-        ds.mask_periodic_signal(args.p_mask_center, args.p_mask_period, args.p_mask_duration)
+        ds.mask_periodic_signal(
+            args.p_mask_center, args.p_mask_period, args.p_mask_duration
+            )
 
     ## Initial outlier and period detection
     ## ------------------------------------
@@ -123,13 +109,17 @@ def detrend(dataset):
     for iset in range(ds.nsets):
         flux = ds.fluxes[iset]
         inputs = np.transpose([ds.time,ds.x,ds.y])
-        detrender = Detrender(flux, inputs, mask=isfinite(flux),
-                            splits=splits, kernel=BasicKernelEP(),
-                            tr_nrandom=args.tr_nrandom,
-                            tr_nblocks=args.tr_nblocks, tr_bspan=args.tr_bspan)
+        detrender = Detrender(
+            flux, inputs, mask=isfinite(flux), splits=args.splits, 
+            kernel=BasicKernelEP(), tr_nrandom=args.tr_nrandom,
+            tr_nblocks=args.tr_nblocks, tr_bspan=args.tr_bspan
+            )
     
-        ttrend,ptrend = detrender.predict(detrender.kernel.pv0+1e-5, components=True)
-        cflux = flux-ptrend+median(ptrend)-ttrend+median(ttrend)
+        ttrend,ptrend = detrender.predict(
+            detrender.kernel.pv0+1e-5, components=True
+            )
+
+        cflux = flux - ptrend + median(ptrend) - ttrend + median(ttrend)
         cflux /= nanmedian(cflux)
 
         ## Iterative sigma-clipping
@@ -150,7 +140,6 @@ def detrend(dataset):
             info('  Flagged %i (%4.1f%%) outliers.', (~omask).sum(), ofrac)
         else:
             info('  Found %i (%4.1f%%) outliers. Not flagging..', (~omask).sum(), ofrac)
-
 
         ## Lomb-Scargle period search
         ## --------------------------
@@ -196,7 +185,7 @@ def detrend(dataset):
         tstart = time()
         inputs = np.transpose([ds.time,ds.x,ds.y])
         detrender = Detrender(ds.fluxes[iset], inputs, mask=masks[iset],
-                              splits=splits, kernel=kernel, tr_nrandom=args.tr_nrandom,
+                              splits=args.splits, kernel=kernel, tr_nrandom=args.tr_nrandom,
                               tr_nblocks=args.tr_nblocks, tr_bspan=args.tr_bspan)
 
         de = DiffEvol(detrender.neglnposterior, kernel.bounds, args.de_npop)
@@ -277,104 +266,143 @@ def detrend(dataset):
         info('  CDPP - full reduction - %6.3f', cdpp_c)
         info('Detrending time %6.3f', time()-tstart)
 
-    FITSWriter.write(fpath_out, splits, ds, results)
     info('Finished')
-    fh.flush()
-    logger.removeHandler(fh)
-    fh.close()
-    logfile.close()
+    return dataset, results
 
+class Object(object):
+    pass
 
-if __name__ == '__main__':
-    # Runtime examples.
-    # bin/k2sc -c 3 /Users/petigura//Research/K2//k2_archive/pixel/C3/ktwo205904628-c03_lpd-targ.fits
-    # 
-    ap = ArgumentParser(description='K2SC: K2 systematics correction using Gaussian processes')
-    gts = ap.add_argument_group('Training set options')
-    gps = ap.add_argument_group('Period search', description='Options to control the initial Lomb-Scargle period search')
-    gfd = ap.add_argument_group('Flare detection', description='Options to control the detection and masking of flares')
-    god = ap.add_argument_group('Outlier detection')
-    gde = ap.add_argument_group('Global optimisation', description='Options to control the global hyperparameter optimisation')
-    ap.add_argument('pixfn', metavar = 'F', type=str, help='Input light curve file name.')
-    ap.add_argument('-c', '--campaign', metavar='C', type=int, help='Campaign number')
-    ap.add_argument('--splits', default=None, type=lambda s:fromstring(s.strip('[]'), sep=','), help='List of time values for kernel splits')
-    ap.add_argument('--quiet', action='store_true', default=False, help='suppress messages')
-    ap.add_argument('--save-dir', default='.', help='The directory to save the output file in')
-    ap.add_argument('--start-i', default=0, type=int)
-    ap.add_argument('--end-i', default=None, type=int)
-    ap.add_argument('--seed', default=0, type=int)
-    ap.add_argument('--logfile', default='', type=str)
-    ap.add_argument('--flux-type', default='sap', type=str)
-    ap.add_argument('--default-position-kernel', choices=['SqrExp','Exp'], default='SqrExp')
-    ap.add_argument('--kernel', choices=kernels.keys(), default=None)
-    ap.add_argument('--kernel-period', type=float, default=None)
-    ap.add_argument('--p-mask-center', type=float, default=None)
-    ap.add_argument('--p-mask-period', type=float, default=None)
-    ap.add_argument('--p-mask-duration', type=float, default=None)
-    gts.add_argument('--tr-nrandom', default=400, type=int, help='Number of random samples')
-    gts.add_argument('--tr-nblocks', default=6, type=int, help='Number of sample blocks')
-    gts.add_argument('--tr-bspan', default=50, type=int, help='Span of a single block')
-    gde.add_argument('--de-npop', default=100, type=int, help='Size of the differential evolution parameter vector population')
-    gde.add_argument('--de-niter', default=150, type=int, help='Number of differential evolution iterations')
-    gde.add_argument('--de-max-time', default=300, type=float, help='Maximum time used for differential evolution')
-    gps.add_argument('--ls-max-fap', default=-50, type=float, help='Maximum Lomb-Scargle log10(false alarm) treshold to use the periodic kernel')
-    gps.add_argument('--ls-min-period', default=0.05, type=float, help='Minimum period to search for')
-    gps.add_argument('--ls-max-period', default=25, type=float, help='Maximum period to search for')
-    gfd.add_argument('--flare-sigma', default=5, type=float)
-    gfd.add_argument('--flare-erosion', default=5, type=int)
-    god.add_argument('--outlier-sigma', default=5, type=float)
-    god.add_argument('--outlier-mwidth', default=25, type=int)
-    god.add_argument('--npix', default=20, type=int)
-    args = ap.parse_args()
+def main(dataset, splits, queit=True, seed=0,
+         default_position_kernel='SqrExp', kernel=None,
+         kernel_period=None, p_mask_center=None, p_mask_duration=None,
+         tr_nrandom=400, tr_nblocks=6, tr_bspan=50, de_npop=100,
+         de_niter=150, de_max_time=300.0, ls_max_fap=-50.0,
+         ls_min_period=0.05, ls_max_period=25.0, flare_sigma=5.0,
+         flare_erosion=5, outlier_sigma=5.0, outlier_mwidth=25):
+    """Emulation of __main__ from bin/k2sc, generates a stand in for the args
+    object which is passed around.
 
-    csplits = {4: [2240,2273], 3: [2180], 1:[2017,2022] }
+    :param splits:
+    :type splits: list of ints
+    
+    :param quiet:
+    :type quiet: suppress messages
 
-    transfn = {1:'pixeltrans_C1_ch04.h5' , 3: 'pixeltrans_C3_ch04.h5',}
-    transfn = transfn[args.campaign]
-    transfn = join('/Users/petigura//Research/K2//k2photfiles/',transfn)
+    :param seed: initialized DE (default 0)
+    :type seed: int 
 
-    print(args)
+    :param default_position_kernel: choices=['SqrExp','Exp'], default=SqrExp
+    :type default_position_kernel: str 
+
+    :param kernel:
+    :type kernel: str 
+
+    :param kernel_period: (default None)
+    :type kernel_period: float 
+
+    :param p_mask_center: (default None)
+    :type p_mask_center: float
+
+    :param p_mask_duration: default None
+    :type p_mask_duration: float
+
+    :param tr_nrandom: Number of random samples (default 400)
+    :type tr_nrandom: int
+
+    :param tr_nblocks: Number of sample blocks (default 6) 
+    :type param: int
+
+    :param tr_bspan: Span of a single block (default 50)
+    :type tr_bspan: int
+
+    :param de_npop: 
+        Size of the differential evolution parameter
+        vector population (default 100)
+    :type de_npop: int
+
+    :param de_niter: Number of differential evolution iterations (default 150)
+    :type de_niter: int
+
+    :param de_max_time:
+        Maximum time used for differential evolution (default 300)
+    :type de_max_time: float 
+    
+    :param ls_max_fap: 
+        Maximum Lonb-Scargle log10(false alarm) threshold to use
+        periodic kernel (default -50.0) 
+    :type ls_max_fap: float
+
+    :param ls_min_period: Minimum period to search for (default 0.05)
+    :type ls_min_period: float
+
+    :param ls_max_period: Maximum period to search for (default 25)
+    :type ls_max_period: float
+
+    :param flare_sigma: (default 5.0)
+    :type flare_sigma: float
+    
+    :param flare_erosion: (default 5)
+    :type flare_erosion: int
+
+    :param outlier_sigma: (default 5.0)
+    :type outlier_sigma: float
+    
+    :param outlier_mwidth: (default 25)
+    :type outlier_mwidth: int
+
+    Examples
+
+    bin/k2sc -c 3 /Users/petigura//Research/K2//k2_archive/pixel/C3/ktwo205904628-c03_lpd-targ.fits
+
+    """
+    args = Object()
+    args.dataset = dataset
+    args.splits = splits
+    args.queit = queit
+    args.seed = seed
+    args.kernel = kernel
+    args.default_position_kernel = default_position_kernel
+    args.kernel_period = kernel_period
+    args.p_mask_center = p_mask_center
+    args.p_mask_duration = p_mask_duration
+    args.tr_nrandom = tr_nrandom
+    args.tr_nblocks = tr_nblocks
+    args.tr_bspan = tr_bspan
+    args.de_npop = de_npop
+    args.de_niter  = de_niter
+    args.de_max_time = de_max_time
+    args.ls_max_fap = ls_max_fap
+    args.ls_min_period = ls_min_period
+    args.ls_max_period = ls_max_period
+    args.flare_sigma = flare_sigma
+    args.flare_erosion = flare_erosion
+    args.outlier_sigma = outlier_sigma
+    args.outlier_mwidth = outlier_mwidth
+
+#    csplits = {4: [2240,2273], 3: [2180], 1:[2017,2022] }
+#    transfn = {1:'pixeltrans_C1_ch04.h5' , 3: 'pixeltrans_C3_ch04.h5',}
+#    transfn = transfn[args.campaign]
+#    transfn = join('/Users/petigura//Research/K2//k2photfiles/',transfn)
+#    print(args)
 
     ## Logging
     logger = logging.getLogger('Master')
-    if args.logfile:
-        logfile = open(args.logfile, mode='w')
-        fh = logging.StreamHandler(logfile)
-        fh.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
-        fh.setLevel(logging.DEBUG)
-        logger.addHandler(fh)
 
     if args.splits is None:
         splits = csplits[args.campaign]
     else:
         splits = args.splits
 
-    if not exists(args.save_dir):
-        logger.error("Error: the save directory {:s} doesn't exists".format(args.save_dir), file=sys.stderr)
-        exit(errno.ENOENT)
 
     ## Select data reader
     ## NOTE: We don't allow mixed input types per run
-    reader = MASTPixelReader
 
-    n_items = 1
-    sid = 0
-
-    logger.info('')
-    logger.info('Saving the results to %s', args.save_dir)
-    logger.info('')
-    logger.info('Differential evolution parameters')
+    logger.info('  Differential evolution parameters')
     logger.info('  Population size: {:3d}'.format(args.de_npop))
     logger.info('  Number of iterations: {:3d}'.format(args.de_niter))
     logger.info('  Maximum DE time: {:6.2f} seconds'.format(args.de_max_time))
     logger.info('')
 
-
-    pixfn = args.pixfn
-    lcfn = 'test.fits'
-    tlimits = [0,9999]
-    pipe = k2phot.pipeline_k2sc.PipelineK2SC(pixfn,lcfn,transfn)
-    pipe.npix = args.npix
-    dataset = pipe.get_K2Data()
-    detrend(dataset)
+    results = detrend(dataset, args)
+    return results
 
