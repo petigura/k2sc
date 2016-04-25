@@ -76,8 +76,8 @@ def detrend(dataset, args):
 
     ## Setup the logger
     ## ----------------
-    logger  = logging.getLogger('Worker %i'%mpi_rank)
-    logger.name = 'Worker {:d} <{:d}>'.format(mpi_rank, dataset.epic)
+    logger  = logging.getLogger('Worker %i' % mpi_rank)
+    logger.name = '<{:d}>'.format(dataset.epic)
 
     np.seterrcall(lambda e,f: logger.info(e))
     np.seterr(invalid='ignore')
