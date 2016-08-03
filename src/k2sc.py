@@ -157,6 +157,7 @@ def detrend(dataset, args):
         
     ## Kernel selection
     ## ----------------
+    args.kernel='basic'
     if args.kernel:
         info('Overriding automatic kernel selection, using %s kernel as given in the command line', args.kernel)
         if 'periodic' in args.kernel and not args.kernel_period:
