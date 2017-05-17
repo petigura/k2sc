@@ -82,12 +82,21 @@ class BasicKernel(DtKernel):
     pv0   = array([-6.0, 0.25, -5.4, 21, 21, -3])
     ndim  = 3
     npar  = 6
-    priors = [UP(   -7,    1),              ## 0 -- log10 time amplitude
+
+    #import pdb;pdb.set_trace()
+    #TJD editing kernel to allow for higher amplitude time variability
+    priors = [UP(   -7,    1.5),              ## 0 -- log10 time amplitude
               LP( 0.25, 1.25, lims=[0,1]),  ## 1 -- inverse time scale
               UP(   -7,    0),              ## 2 -- xy log10 amplitude
               NP(   17,    8, lims=[0,70]), ## 3 -- inverse x scale
               NP(   17,    8, lims=[0,70]), ## 4 -- inverse y scale
               UP(   -6,    0)]              ## 5 -- log10 white noise
+    #priors = [UP(   -7,    1),              ## 0 -- log10 time amplitude
+    #          LP( 0.25, 1.25, lims=[0,1]),  ## 1 -- inverse time scale
+    #          UP(   -7,    0),              ## 2 -- xy log10 amplitude
+    #          NP(   17,    8, lims=[0,70]), ## 3 -- inverse x scale
+    #          NP(   17,    8, lims=[0,70]), ## 4 -- inverse y scale
+    #          UP(   -6,    0)]              ## 5 -- log10 white noise
     bounds = [[-5,-3],[0.01,0.6],[-5,-3],[2,20],[2,20],[-4,-2]] 
     
     def _define_kernel(self):
@@ -110,12 +119,21 @@ class BasicKernel(DtKernel):
 class BasicKernelEP(BasicKernel):
     name  = "BasicKernelEP"
     eq    = 'At*ESK(1/St) + Ap*EK(1/Sx)*EK(1/Sy)'
-    priors = [UP(  -7,    1),              ## 0 -- log10 time amplitude
+    
+    #import pdb;pdb.set_trace()
+    #TJD editing kernel to allow for higher amplitude time variability
+    priors = [UP(  -7,    1.5),              ## 0 -- log10 time amplitude
               LP(0.25, 1.25, lims=[0,1]),  ## 1 -- inverse time scale
               UP(  -7,    0),              ## 2 -- xy log10 amplitude
               NP(  10,   15, lims=[0,70]), ## 3 -- inverse x scale
               NP(  10,   15, lims=[0,70]), ## 4 -- inverse y scale
               UP(  -6,    0)]              ## 5 -- glo10 white noise
+    #priors = [UP(  -7,    1),              ## 0 -- log10 time amplitude
+    #          LP(0.25, 1.25, lims=[0,1]),  ## 1 -- inverse time scale
+    #          UP(  -7,    0),              ## 2 -- xy log10 amplitude
+    #          NP(  10,   15, lims=[0,70]), ## 3 -- inverse x scale
+    #          NP(  10,   15, lims=[0,70]), ## 4 -- inverse y scale
+    #          UP(  -6,    0)]              ## 5 -- glo10 white noise
 
     def _define_kernel(self):
         pv = self._pv
@@ -151,7 +169,10 @@ class QuasiPeriodicKernel(BasicKernel):
     pv0   = array([-6.0, 0.25, 10, 0.01, -5.4, 21, 21, -3])
     ndim  = 3
     npar  = 8
-    priors = [UP(   -6,    1),               ## 0 -- time log10 amplitude
+    
+    #import pdb;pdb.set_trace()
+    #TJD editing kernel to allow for higher amplitude time variability    
+    priors = [UP(   -6,    1.5),               ## 0 -- time log10 amplitude
               LP( 0.25, 1.25, lims=[0,2]),   ## 1 -- inverse time scale
               UP( 0.04,   45),               ## 2 -- period
               LP( 0.25, 1.25, lims=[0,2]),   ## 3 -- time Evolution
@@ -159,6 +180,14 @@ class QuasiPeriodicKernel(BasicKernel):
               NP(   17,    8, lims=[0,70]),  ## 5 -- inverse x scale
               NP(   17,    8, lims=[0,70]),  ## 6 -- inverse y scale
               UP(   -6,    0)]               ## 7 -- log10 white noise
+    #priors = [UP(   -6,    1),               ## 0 -- time log10 amplitude
+    #          LP( 0.25, 1.25, lims=[0,2]),   ## 1 -- inverse time scale
+    #          UP( 0.04,   45),               ## 2 -- period
+    #          LP( 0.25, 1.25, lims=[0,2]),   ## 3 -- time Evolution
+    #          UP(   -6,    0),               ## 4 -- xy log10 amplitude
+    #          NP(   17,    8, lims=[0,70]),  ## 5 -- inverse x scale
+    #          NP(   17,    8, lims=[0,70]),  ## 6 -- inverse y scale
+    #          UP(   -6,    0)]               ## 7 -- log10 white noise
 
     bounds = [[-5,-2],[0.1,1],[0,20],[0.01,1],[-5,-2],[2,50],[2,50],[-4,-2]]
 
@@ -190,14 +219,25 @@ class QuasiPeriodicKernel(BasicKernel):
 class QuasiPeriodicKernelEP(QuasiPeriodicKernel):
     name  = "QuasiPeriodicKernelEP"
     eq    = ''
-    priors = [UP(   -6,    1),               ## 0 -- time log10 amplitude
+
+    #import pdb;pdb.set_trace()
+    #TJD editing kernel to allow for higher amplitude time variability    
+    priors = [UP(   -6,    1.5),               ## 0 -- time log10 amplitude
               LP( 0.25, 1.25, lims=[0,2]),   ## 1 -- inverse time scale
               UP( 0.25,   45),               ## 2 -- period
               LP( 0.25, 1.25, lims=[0,2]),   ## 3 -- time Evolution
               UP(   -6,    0),               ## 4 -- xy log10 amplitude
               NP(   10,   15, lims=[0,70]),  ## 5 -- inverse x scale
               NP(   10,   15, lims=[0,70]),  ## 6 -- inverse y scale
-              UP(   -6,   0)]                ## 7 -- log10 white noise
+              UP(   -6,   0)]                ## 7 -- log10 white noise    
+    #priors = [UP(   -6,    1),               ## 0 -- time log10 amplitude
+    #          LP( 0.25, 1.25, lims=[0,2]),   ## 1 -- inverse time scale
+    #          UP( 0.25,   45),               ## 2 -- period
+    #          LP( 0.25, 1.25, lims=[0,2]),   ## 3 -- time Evolution
+    #          UP(   -6,    0),               ## 4 -- xy log10 amplitude
+    #          NP(   10,   15, lims=[0,70]),  ## 5 -- inverse x scale
+    #          NP(   10,   15, lims=[0,70]),  ## 6 -- inverse y scale
+    #          UP(   -6,   0)]                ## 7 -- log10 white noise
 
     def _define_kernel(self):
         pv = self._pv
